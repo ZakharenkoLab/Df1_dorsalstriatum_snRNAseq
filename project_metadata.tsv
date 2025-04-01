@@ -1,0 +1,9 @@
+ID	Subject	Date_birth	Date_dissection	Age_days	Litter	Sex	Genotype	Brain_region	Date_nuclei	Alex_sample_name	Sequencing_date	SAMPLE	DefaultCellranger	Expected8KCellranger	Forced6KCellranger
+DST809	BDH6809	8/1/23	10/4/23	64	1	M	WT	dorsal_striatum	1/8/24	1	1/29/24	2697127_mhp001	72215	18542	6000
+DST811	BDH6811	8/1/23	10/4/23	64	1	M	WT	dorsal_striatum	1/8/24	3	1/29/24	2697129_mhp003	85241	83401	6000
+DST813	BDH6813	8/1/23	10/4/23	64	1	M	Het	dorsal_striatum	1/8/24	2	1/29/24	2697128_mhp002	85570	40133	6000
+DST815	BDH6815	8/1/23	10/4/23	64	1	M	WT	dorsal_striatum	1/9/24	6	1/29/24	2697132_mhp006	74935	25540	6000
+DST817	BDH6817	8/1/23	10/4/23	64	1	M	Het	dorsal_striatum	1/8/24	4	1/29/24	2697130_mhp004	82220	65288	6000
+DST800	BDH6800	8/1/23	10/4/23	64	1	F	Het	dorsal_striatum	1/9/24	5	1/29/24	2697131_mhp005	82179	22377	6000
+DST802	BDH6802	8/1/23	10/4/23	64	1	F	WT	dorsal_striatum	1/9/24	8	1/29/24	2697134_mhp008	79097	21050	6000
+DST804	BDH6804	8/1/23	10/4/23	64	1	F	Het	dorsal_striatum	1/9/24	7	1/29/24	2697133_mhp007	9149	8917	6000

@@ -1,0 +1,32 @@
+Cluster	Cell_Type	Object
+1	 Matrix D1 MSN	Reclustered
+2	 Matrix D2 MSN	Reclustered
+3	 Mixed IN	Reclustered
+4	 Oligodendrocyte	Reclustered
+5	 Astrocyte	Reclustered
+6	 Patch D2 MSN	Reclustered
+7	 Patch D1 MSN	Reclustered
+8	 Eccentric MSN	Reclustered
+9	 OPC	Reclustered
+10	 Pthlh IN	Reclustered
+11	 Microglia	Reclustered
+12	 CHI	Reclustered
+13	 SST/NPY IN	Reclustered
+14	 Endothelial Cell	Reclustered
+1	 Matrix D1 MSN	Original
+2	 D2 MSN	Original
+3	 Cortex IT ExN	Original
+4	 Mixed IN	Original
+5	 Astrocyte	Original
+6	 Oligodendrocyte	Original
+7	 Cortex ET ExN	Original
+8	 Patch D1 MSN	Original
+9	 Thalamic ExN	Original
+10	 Eccentric MSN	Original
+11	 OPC	Original
+12	 Pthlh IN	Original
+13	 Car3 ExN	Original
+14	 Microglia	Original
+15	 CHI	Original
+16	 SST/NPY IN	Original
+17	 Endothelial Cell	Original

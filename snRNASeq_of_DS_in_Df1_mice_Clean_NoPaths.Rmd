@@ -1,0 +1,329 @@
+---
+title: "snRNASeq_of_DS_in_Df1_mice"
+author: "Cody Ramirez, Sharon Freshour"
+date: "2/2/2024"
+output: html_document
+---
+
+
+
+```{r}
+### Load functions for processing single cell ###
+SingleCellFunctions <- "/Programs/Single_Cell_Analysis_Functions.R"
+source(SingleCellFunctions)
+
+full_path <- "../snRNASeq_of_DS_in_Df1_mice"
+
+# Will use object with CellRanger force 8k cells, SoupX correction, 1% mitochondrial filter, save results here
+results_path <- "../5_8KForcedCellRanger_SoupX_mito1"
+
+# Set seed for reproducibility
+set.seed(1234)
+
+# Reading in metadata file
+project.metadata <- read.csv("project_metadata.tsv", sep = '\t', header = TRUE)
+
+# Read in curated cell types (based on forced 8k, soupx corrected, 1% mito filtered, Harmony integrated clustering)
+curated_cell_types <- read.delim("Curated_Cell_Types_by_Cluster.txt")
+curated_cell_types$Cluster <- str_trim(curated_cell_types$Cluster, "both")
+curated_cell_types$Cell_Type <- str_trim(curated_cell_types$Cell_Type, "both")
+curated_cell_types$Object <- str_trim(curated_cell_types$Object, "both")
+
+# Split curated cell types by original object, reclustered (thalamic, cortex removed) object
+OG_curated_cell_types <- subset(curated_cell_types, Object == "Original")
+Reclustered_curated_cell_types <- subset(curated_cell_types, Object == "Reclustered")
+```
+
+
+
+```{r}
+### Ambient RNA Clean up - SoupX ###
+for (i in 1:length(project.metadata$ID))
+{
+    OutsFolder = paste(full_path, "/2_cellranger_count/ForcedCells8000Parameters/", project.metadata$ID[i], "/outs", sep = "")
+  pdf(file = paste(OutsFolder, "/SoupX_output.pdf", sep = ""))
+  # Load data and estimate soup profile
+  SoupChannel = load10X(OutsFolder)
+  # Estimate rho
+  SoupChannel = autoEstCont(SoupChannel, forceAccept = TRUE)
+  # Clean the data
+  out = adjustCounts(SoupChannel, roundToInt = TRUE)
+  # Of course, the next thing you'll want to do is to load this corrected expression matrix into some downstream analysis tool and further analyse the data.
+  # The corrected matrix can then be used for any downstream analysis in place of the uncorrected raw matrix. If you are using 10X data and would like to save these final counts out in the same format, you can use the DropletUtils write10xCounts function like this,
+  DropletUtils:::write10xCounts(paste(OutsFolder, "/strainedCounts", sep = ""), out, overwrite = TRUE)
+  dev.off()
+}
+```
+
+
+
+```{r}
+############################################################################################################
+# Reading in the data, appending sample metadata and conducting basic filtering
+############################################################################################################
+# Creating a list to contain all Seurat data
+Filtered.Master.Seurat.obj <- list()
+
+for (i in 1:length(project.metadata$ID)){
+
+  cat("Beginning to process sample:", project.metadata$ID[i], "\n")
+  cat("Reading in data\n")
+
+  Seurat.data <- Read10X(data.dir = paste0(full_path, "/2_cellranger_count/ForcedCells8000Parameters/", project.metadata$ID[i], "/outs/strainedCounts/"))
+  
+  cat("Creating SeuratObject\n")
+  Filtered.Master.Seurat.obj[[i]] <- CreateSeuratObject(counts = Seurat.data, min.cells = 3, min.features = 200)
+  
+  cat("Calculating mitochondrial percentage per cell\n")
+  Filtered.Master.Seurat.obj[[i]] <- PercentageFeatureSet(Filtered.Master.Seurat.obj[[i]], pattern = "^mt-", col.name = "percent.mito")
+  
+  Filtered.Master.Seurat.obj[[i]]$log10GenesPerUMI <- log10(Filtered.Master.Seurat.obj[[i]]$nFeature_RNA)/log10(Filtered.Master.Seurat.obj[[i]]$nCount_RNA)
+  
+  cat("Adding metadata to SeuratObject\n")
+  sample.metadata <- rbind(project.metadata[i, ], project.metadata[i, ][rep(1, length(Filtered.Master.Seurat.obj[[i]]$nCount_RNA)-1), ])
+  
+  Filtered.Master.Seurat.obj[[i]]@meta.data <- cbind(Filtered.Master.Seurat.obj[[i]]@meta.data, sample.metadata)
+  
+  cat("Generating QC plots for RAW data\n")
+  Generate.QC.Plots(Filtered.Master.Seurat.obj[[i]], results_path, "0", project.metadata$ID[i], "QC_Raw_Data")
+  
+  # Lowered mitochondrial filter to a hard 1% cutoff
+  cat("1st Data filter\n")
+  Filtered.Master.Seurat.obj[[i]] <- subset(Filtered.Master.Seurat.obj[[i]], subset = 
+                                              nFeature_RNA >= 1000 & 
+                                              nCount_RNA >= 500 & 
+                                              percent.mito <= 1)
+  
+  cat("Generating QC plots for FILTERED data\n")
+  Generate.QC.Plots(Filtered.Master.Seurat.obj[[i]], results_path, "2", project.metadata$ID[i], "QC_Filtered_Data")
+  
+  cat("Processing a single sample and generating clusters\n")
+  Filtered.Master.Seurat.obj[[i]] <- Single.Sample(Filtered.Master.Seurat.obj[[i]], results_path, "3", project.metadata$ID[i], "mm10", Regress.Cell.Cycle = "NO", Resolution.List = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1))
+  
+  Filtered.Master.Seurat.obj[[i]] <- SetIdent(Filtered.Master.Seurat.obj[[i]], value=Filtered.Master.Seurat.obj[[i]]@meta.data$RNA_snn_res.0.3)
+  
+  # Save cluster marker DE results for resolution 0.3 initially
+  cat("Generating Differential Expression Data\n")
+  Generate.Differential.Data(Filtered.Master.Seurat.obj[[i]], results_path, "3", project.metadata$ID[i], "Single.Sample", "pt3")
+
+  saveRDS(Filtered.Master.Seurat.obj[[i]], file = paste(results_path, "/",  project.metadata$ID[[i]], "/", project.metadata$ID[[i]], "_3_Single.Sample/", project.metadata$ID[[i]], "_object.rds", sep = ""))
+  
+  cat("Processing complete for sample:", project.metadata$ID[i], "\n")
+}
+
+rm(Seurat.data)
+saveRDS(Filtered.Master.Seurat.obj, file = paste(results_path, "/Filtered_Master_Seurat_obj.rds", sep = ""))
+```
+
+
+
+```{r}
+##### Harmony Integration #####
+Filtered.Master.Seurat.obj <- readRDS(file = paste(results_path, "/Filtered_Master_Seurat_obj.rds", sep = ""))
+
+cat("Processing a single sample and generating clusters\n")
+Harmony_Integrated <- Harmony.Integration(Filtered.Master.Seurat.obj, "ID", results_path, "3", "All_Samples", "mm10", Regress.Cell.Cycle = "NO", Resolution.List = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1))
+
+# Make sure cluster numbers are treated as numeric factors and ordered correctly
+for(i in which(startsWith(colnames(Harmony_Integrated@meta.data), "RNA_snn_res")))
+{
+  Harmony_Integrated@meta.data[,i] <- factor(as.numeric(as.character(Harmony_Integrated@meta.data[,i])))
+}
+
+Harmony_Integrated <- SetIdent(Harmony_Integrated, value=Harmony_Integrated@meta.data$RNA_snn_res.0.3)
+
+cat("Generating QC plots for FILTERED data\n")
+Generate.QC.Plots(Harmony_Integrated, results_path, "2", "All_Samples", "QC_Filtered_Data")
+
+cat("Generating Differential Expression Data\n")
+Generate.Differential.Data(Harmony_Integrated, results_path, "3", "All_Samples", "Harmony.Integration", "pt3")
+
+saveRDS(Harmony_Integrated, file = paste(results_path, "/All_Samples/All_Samples_3_Harmony.Integration/Harmony_Integrated_obj.rds", sep = ""))
+```
+
+
+
+```{r}
+### Generating differential expression data for resolution 0.2 ### 
+Harmony_Integrated <- readRDS(file = paste(results_path, "/All_Samples/All_Samples_3_Harmony.Integration/Harmony_Integrated_obj.rds", sep = ""))
+
+Harmony_Integrated <- SetIdent(Harmony_Integrated, value=Harmony_Integrated@meta.data$RNA_snn_res.0.2)
+
+cat("Generating Differential Expression Data\n")
+Generate.Differential.Data(Harmony_Integrated, results_path, "3", "All_Samples", "Harmony.Integration", "pt2")
+```
+
+
+
+```{r}
+### Add curated cell types to Seurat object ###
+Harmony_Integrated <- readRDS(paste0(results_path, "/All_Samples/All_Samples_3_Harmony.Integration/Harmony_Integrated_obj.rds"))
+
+# Set idents to res 0.2 as that's what was used for the final clustering/cell assignments
+Idents(Harmony_Integrated) <- Harmony_Integrated@meta.data$RNA_snn_res.0.2
+
+OG_curated_cell_types_key <- OG_curated_cell_types$Cell_Type
+names(OG_curated_cell_types_key) <- OG_curated_cell_types$Cluster
+Harmony_Integrated@meta.data$curated.cell.types <- OG_curated_cell_types_key[Harmony_Integrated@meta.data$RNA_snn_res.0.2]
+
+saveRDS(Harmony_Integrated, paste0(results_path, "/All_Samples/All_Samples_3_Harmony.Integration/Harmony_Integrated_obj.rds"))
+```
+
+
+
+```{r}
+### Run VoxHunt on full object to explore Thalamic and Cortex clusters ###
+
+# Since mice for project are 64 days, use P56 data set from ABA resource as this is closet time point available
+# Group by res 0.2 clusters
+# Working based off this vignette: 
+# https://quadbio.github.io/VoxHunt/articles/getting_started.html
+# Load packages
+library(presto)
+library(voxhunt)
+
+# Load ABA data set
+load_aba_data("/voxhunt_rds")
+
+# Get regional markers
+regional_markers <- structure_markers('P56') %>%
+    group_by(group) %>%
+    top_n(10, auc) %>% 
+    {unique(.$gene)}
+head(regional_markers)
+
+# Generate labeled structure map
+png(filename = paste0(results_path,"/VoxHunt_ABA_P56_Regions.png"), units = "in", res = 300, width = 16, height = 12)
+voxhunt::plot_annotation('P56', show_legend = T)
+dev.off()
+
+# Make object with gene names uppercase to match ABA gene name format
+Harmony_Integrated_Subset_Genes_Upper <- GetAssayData(Harmony_Integrated, slot = "counts")
+rownames(Harmony_Integrated_Subset_Genes_Upper) <- toupper(rownames(Harmony_Integrated_Subset_Genes_Upper))
+Harmony_Integrated_Subset_Genes_Upper <- CreateSeuratObject(Harmony_Integrated_Subset_Genes_Upper)
+Harmony_Integrated_Subset_Genes_Upper <- NormalizeData(Harmony_Integrated_Subset_Genes_Upper)
+Harmony_Integrated_Subset_Genes_Upper@meta.data <- Harmony_Integrated@meta.data
+Idents(Harmony_Integrated_Subset_Genes_Upper) <- Harmony_Integrated_Subset_Genes_Upper@meta.data$RNA_snn_res.0.2
+
+# Focus on clusters 1,3,7,9,13
+Harmony_Integrated_Subset_Genes_Upper <- subset(Harmony_Integrated_Subset_Genes_Upper, idents = c(1,3,7,9,13))
+Harmony_Integrated_Subset_Genes_Upper[["reordered_clusters"]] <- factor(Harmony_Integrated_Subset_Genes_Upper@meta.data$RNA_snn_res.0.2, levels = c(1,3,7,13,9))
+
+Harmony_Integrated_Subset_Genes_Upper@meta.data$cell.type.by.cluster <- factor(paste0(Harmony_Integrated_Subset_Genes_Upper@meta.data$curated.cell.types," (Cluster ",Harmony_Integrated_Subset_Genes_Upper@meta.data$reordered_clusters,")"), levels = c("Matrix D1 MSN (Cluster 1)","Cortex IT ExN (Cluster 3)","Cortex ET ExN (Cluster 7)","Car3 ExN (Cluster 13)","Thalamic ExN (Cluster 9)"))
+
+# Create subset VoxHunt mapping
+vox_map_subset <- voxel_map(
+    Harmony_Integrated_Subset_Genes_Upper, 
+    stage = 'P56', 
+    group_name = 'cell.type.by.cluster', 
+    genes_use = regional_markers,
+    pseudobulk_groups = T
+)
+
+#print(vox_map_subset)
+
+pdf(file = paste0(results_path,"/Subset_VoxHunt_ABA_Mapping_on_Structure.pdf"), width = 16, height = 12)
+plot_map(vox_map_subset, nrow = 3)
+dev.off()
+```
+
+
+
+```{r}
+### Remove Thalamic, Cortex contamination clusters ###
+# Save object before reclustering
+Removed_Harmony_Integrated <- subset(Harmony_Integrated, idents = c(1:2,4:6,8,10:12,14:17))
+
+saveRDS(Removed_Harmony_Integrated, paste0(results_path,"/Reclustered_All_Samples/Removed_Harmony_Integrated_obj.rds"))
+
+Removed_Harmony_Integrated <- readRDS(file = paste(results_path, "/Reclustered_All_Samples/Removed_Harmony_Integrated_obj.rds", sep = ""))
+
+# Set ident to 0.2 resolution
+Removed_Harmony_Integrated <- SetIdent(Removed_Harmony_Integrated, value=Removed_Harmony_Integrated@meta.data$RNA_snn_res.0.2)
+
+# Reintegrate, recluster and save subset object
+Removed.Filtered.Master.Seurat.obj <- SplitObject(Removed_Harmony_Integrated, split.by = "ID")
+
+Reclustered_Removed_Harmony_Integrated <- Harmony.Integration(Removed.Filtered.Master.Seurat.obj, "ID", results_path, "3", "Reclustered_All_Samples", "mm10", Regress.Cell.Cycle = "NO", Resolution.List = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1))
+
+saveRDS(Reclustered_Removed_Harmony_Integrated, paste0(results_path,"/Reclustered_All_Samples/Reclustered_All_Samples_3_Harmony.Integration/Reclustered_Harmony_Integrated_obj.rds"))
+
+Reclustered_Removed_Harmony_Integrated <- readRDS(file = paste(results_path, "/Reclustered_All_Samples/Reclustered_All_Samples_3_Harmony.Integration/Reclustered_Harmony_Integrated_obj.rds", sep = ""))
+
+# Set ident for reclustered subset object to 0.2 resolution
+Reclustered_Removed_Harmony_Integrated <- SetIdent(Reclustered_Removed_Harmony_Integrated, value=Reclustered_Removed_Harmony_Integrated@meta.data$RNA_snn_res.0.2)
+
+# Update cluster cell type labels per curated cell type labels for reclustered data
+Reclustered_curated_cell_types_key <- Reclustered_curated_cell_types$Cell_Type
+names(Reclustered_curated_cell_types_key) <- Reclustered_curated_cell_types$Cluster
+Reclustered_Removed_Harmony_Integrated@meta.data$curated.cell.types <- Reclustered_curated_cell_types_key[Reclustered_Removed_Harmony_Integrated@meta.data$RNA_snn_res.0.2]
+```
+
+
+
+```{r}
+### Calculate module scores for glia cell (aka non-neuronal) types from curated marker list ###
+# Add module scores for non-neuronal gene lists from Kristen (2024-09-27)
+Non_neuronal_genes <- read.csv("DS_NonNeuronal_Genelist.csv")
+
+Reclustered_Removed_Harmony_Integrated <- Calculate.Cell.Type.Signature(Reclustered_Removed_Harmony_Integrated, results_path, "3", "Reclustered_All_Samples", "Harmony.Integration", Non_neuronal_genes, "mm10")
+
+saveRDS(Reclustered_Removed_Harmony_Integrated, paste0(results_path,"/Reclustered_All_Samples/Reclustered_All_Samples_3_Harmony.Integration/Reclustered_Harmony_Integrated_obj.rds"))
+```
+
+
+
+```{r}
+### Generate cluster marker DE results for reclustered object ###
+# Get DE results for resolution 0.2
+Reclustered_Removed_Harmony_Integrated <- SetIdent(Reclustered_Removed_Harmony_Integrated, value=Reclustered_Removed_Harmony_Integrated@meta.data$RNA_snn_res.0.2)
+
+Generate.Differential.Data(Reclustered_Removed_Harmony_Integrated, results_path, "3", "Reclustered_All_Samples", "Harmony.Integration", "pt2")
+```
+
+
+
+```{r}
+### Generate within cluster DE results comparing Genotypes within reclustered object ###
+# Working off suggested methods in this Seurat vignette
+# https://satijalab.org/seurat/articles/de_vignette.html
+Grouping.Variables <- c("RNA_snn_res.0.2", "ID", "Genotype")
+Pseudobulk_Reclustered_Harmony_Integrated <- AggregateExpression(Reclustered_Removed_Harmony_Integrated, return.seurat = T, slot = "counts", assays = "RNA", group.by = Grouping.Variables)
+
+# Fill back in ID and Genotype for metadata of pseudobulk object
+for(i in 1:length(Grouping.Variables))
+{
+  Pseudobulk_Reclustered_Harmony_Integrated[[Grouping.Variables[i]]] <- str_split_i(Cells(Pseudobulk_Reclustered_Harmony_Integrated), "_", i)
+}
+
+# Determine subsetting column
+# Get the values in that column
+# Loop through them to subset
+# Will also need to know column for identity
+# Identities to compare
+Subset.Column <- "RNA_snn_res.0.2"
+Idents.Column <- "Genotype"
+Ident.1 <- "Het"
+Ident.2 <- "WT"
+Pseudobulk_Reclustered_Harmony_Integrated[["Subset.Variable"]] <- Pseudobulk_Reclustered_Harmony_Integrated[[Subset.Column]]
+
+# Make path to write results to
+dir.create(paste0(results_path,"/Reclustered_All_Samples/Reclustered_All_Samples_3_Harmony.Integration/Within_Cluster_DE/"))
+
+saveRDS(Pseudobulk_Reclustered_Harmony_Integrated, file = paste0(results_path, "/Reclustered_All_Samples/Reclustered_All_Samples_3_Harmony.Integration/Within_Cluster_DE/Pseudobulk_Res_pt2_obj.rds"))
+
+# Get DE results
+for(i in unique(Pseudobulk_Reclustered_Harmony_Integrated@meta.data$Subset.Variable))
+# Note: lowered number of cells for ident group to 2 because some conditions within clusters didn't have three or more samples
+{
+  print(i)
+  Bulk_Cluster <- subset(Pseudobulk_Reclustered_Harmony_Integrated, Subset.Variable == i)
+  Idents(Bulk_Cluster) <- Idents.Column
+  DE_Genes <- FindMarkers(Bulk_Cluster, ident.1 = Ident.1, ident.2 = Ident.2, slot = "counts", test.use = "DESeq2", min.cells.group = 2)
+  DE_Genes$Gene <- rownames(DE_Genes)
+  DE_Genes <- DE_Genes[,c(6,1:5)]
+  write.table(DE_Genes, file = paste0(results_path, "/Reclustered_All_Samples/Reclustered_All_Samples_3_Harmony.Integration/Within_Cluster_DE/Cluster_", i, "_", Ident.1, "_vs_", Ident.2, ".tsv"), quote = FALSE, row.names = FALSE, col.names = TRUE, sep = "\t")
+}
+```
+
+
