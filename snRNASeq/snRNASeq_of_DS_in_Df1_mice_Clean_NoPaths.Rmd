@@ -1,15 +1,14 @@
 ---
 title: "snRNASeq_of_DS_in_Df1_mice"
-author: "Cody Ramirez, Sharon Freshour"
+author: "Cody Ramirez, PhD and Sharon Freshour, PhD"
 date: "2/2/2024"
 output: html_document
 ---
 
 
-
 ```{r}
 ### Load functions for processing single cell ###
-SingleCellFunctions <- "/Programs/Single_Cell_Analysis_Functions.R"
+SingleCellFunctions <- "../util/Single_Cell_Analysis_Functions.R"
 source(SingleCellFunctions)
 
 full_path <- "../snRNASeq_of_DS_in_Df1_mice"
@@ -325,5 +324,3 @@ for(i in unique(Pseudobulk_Reclustered_Harmony_Integrated@meta.data$Subset.Varia
   write.table(DE_Genes, file = paste0(results_path, "/Reclustered_All_Samples/Reclustered_All_Samples_3_Harmony.Integration/Within_Cluster_DE/Cluster_", i, "_", Ident.1, "_vs_", Ident.2, ".tsv"), quote = FALSE, row.names = FALSE, col.names = TRUE, sep = "\t")
 }
 ```
-
-

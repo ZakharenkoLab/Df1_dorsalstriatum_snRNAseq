@@ -1,0 +1,293 @@
+---
+title: "PatchSeq_of_DS_in_Df1_mice"
+author: "Sharon Freshour, PhD"
+date: "2025-11-17"
+output: html_document
+---
+
+
+```{r}
+# Load packages from single cell functions script
+Single_Cell_Functions <- "../util/Single_Cell_Analysis_Functions.R"
+source(Single_Cell_Functions)
+
+# Load packages from patch seq script
+PatchSeq_Functions <- "PatchSeq_Functions.R"
+source(PatchSeq_Functions)
+
+full_path <- "../DS_in_Df1_mice_PatchSeq"
+setwd(full_path)
+
+results_path <- paste(full_path, "/3_analyzed_results", sep = "")
+
+# Set seed for reproducibility
+set.seed(1234)
+
+# Reading in metadata file
+project.metadata.unedited <- read.csv("Metadata_for_Publication_w_Automapper_Updated.tsv", sep = '\t', header = TRUE)
+```
+
+
+```{r}
+# Make version of project metadata for editing
+project.metadata <- data.frame(project.metadata.unedited)
+
+# Add column to project metadata for batches
+# Fill with NAs initially
+project.metadata$Batch <- NA
+
+# Also set rownames of the project metadata to cell ID
+rownames(project.metadata) <- project.metadata$SAMPLE_ID
+
+# Read in counts for each batch
+# Remember to edit cell names
+# Get file names
+gene_count_files <- list.files(path = paste0(full_path,"/2_alignment_results"), pattern = "gene_count")
+
+i <- 1
+
+# Loop through file names
+# Assign to general file names
+for(f in gene_count_files)
+{
+  print(f)
+  
+  # Set batch names with batch number
+  batch_name <- paste0("batch_",i)
+  gc_name <- paste0("batch_",i,"_gene_counts")
+
+  # Read in gene counts file
+  tmp_df <- read.delim(file = paste0(full_path,"/2_alignment_results/",f), header = TRUE)
+  
+  # Get number of columns in counts file
+  gc_len <- dim(tmp_df)[2]
+  
+  # Adjust column names to remove prefix from columns with cell names
+  colnames(tmp_df) <- c(colnames(tmp_df)[1:4],substr(colnames(tmp_df)[5:gc_len], 10, 16))
+
+  # Set row names as ensembl IDs
+  rownames(tmp_df) <- tmp_df[,1]
+  
+  # Assign counts file to batch file name
+  assign(gc_name, tmp_df)
+  
+  # Add column to project metadata with batch information
+  project.metadata[colnames(tmp_df)[5:gc_len],"Batch"] <- rep(batch_name, times = length(5:gc_len))
+
+  # Make merged version with all batches in single data frame
+  if(i == 1)
+  {
+    batches_merged <- tmp_df
+    rownames(batches_merged) <- tmp_df[,1]
+  }else{
+    batches_merged[,colnames(tmp_df)[5:gc_len]] <- tmp_df[rownames(batches_merged),colnames(tmp_df)[5:gc_len]]
+  }
+  
+  # Increase batch counter
+  i <- i + 1
+}
+
+# Remove unneeded data frame
+rm(tmp_df)
+```
+
+
+```{r}
+# Collapse patch seq counts by gene names (i.e. counting gene isoforms together under broad gene name)
+# Only keep columns for gene name (geneSymbol), cells
+batches_merged_collapsed <- batches_merged[,c(2,5:dim(batches_merged)[2])]
+
+# Sum rows with matching geneSymbols
+batches_merged_collapsed <- group_by(batches_merged_collapsed,geneSymbol) %>%
+  dplyr::summarise(across(c(colnames(batches_merged_collapsed)[2:dim(batches_merged_collapsed)[2]]), sum)) %>% as.data.frame()
+
+# Set rownames to unique gene symbols now
+rownames(batches_merged_collapsed) <- batches_merged_collapsed$geneSymbol
+
+# Remove gene symbol column
+batches_merged_collapsed <- batches_merged_collapsed[,-c(1)]
+
+# Make log fold version of counts "matrix" for plotting
+batches_merged_collapsed_log <- log(batches_merged_collapsed + 1)
+
+# Filter project metadata by the cells which currently exist in the merged and collapsed data set
+project.metadata <- project.metadata[colnames(batches_merged_collapsed),]
+```
+
+
+```{r}
+# Read in cell type markers from curated marker list and top 10 marker list generated from per cell type DE in snRNA-seq data
+
+# Read in curated markers
+curated_markers <- read.delim("DS_CT_Marker_List.csv", sep = ",")
+rownames(curated_markers) <- curated_markers$Gene
+
+# Remove ERCC genes from curated markers
+curated_markers <- subset(curated_markers, CellType != "ERCC")
+
+# Read in DE markers
+de_markers <- read.delim("DS_snRNAseq_Res_Cell.Type.Sorted_All_markers_Top10.tsv")
+rownames(de_markers) <- make.names(de_markers$gene, unique = TRUE)
+
+# Subset expression "matrices" to marker genes
+batches_log_curated_markers <- batches_merged_collapsed_log[curated_markers$Gene,]
+  
+batches_log_de_markers <- batches_merged_collapsed_log[de_markers$gene,]
+rownames(batches_log_de_markers) <- make.names(rownames(batches_log_de_markers), unique = TRUE)
+
+# Remove any NA rows from the marker "matrices" (i.e. marker genes which are not detected in the PatchSeq counts)
+batches_log_curated_markers <- batches_log_curated_markers[grep(pattern = "NA", rownames(batches_log_curated_markers), invert = TRUE),]
+
+batches_log_de_markers <- batches_log_de_markers[grep(pattern = "NA", rownames(batches_log_de_markers), invert = TRUE),]
+```
+
+
+```{r}
+# Generate PDF figures
+# Subset to tdTomato = TRUE cells
+# Facet heatmap by batch
+# For visibility keep curated and de marker heat maps separate
+project.metadata.pdf <- subset(project.metadata, tdTomato == "TRUE")
+
+# Subset curated marker and de marker matrices to these remaining cells
+batches_log_curated_markers_pdf <- batches_log_curated_markers[,rownames(project.metadata.pdf)]
+
+batches_log_de_markers_pdf <- batches_log_de_markers[,rownames(project.metadata.pdf)]
+
+# Make directory to save PDF files
+if(!dir.exists(paste0(results_path,"/updated_figures/PDFs")))
+{
+  dir.create(paste0(results_path,"/updated_figures/PDFs"))
+}
+
+# Make color scale
+color_scale_curated <- colorRamp2(c(0,15),c("grey","red"))
+
+color_scale_de <- colorRamp2(c(0,15),c("grey","red"))
+
+# Generate heat maps
+pdf(file = paste0(results_path,"/updated_figures/PDFs/curated_markers_heatmap.pdf"), width = 20, height = 12)
+Heatmap(as.matrix(batches_log_curated_markers_pdf), 
+        col = color_scale_curated, 
+        row_split = curated_markers[rownames(batches_log_curated_markers_pdf),c("CellType")],
+        column_split = project.metadata.pdf[colnames(batches_log_curated_markers_pdf),c("Batch")],
+        show_row_names = FALSE, 
+        row_title_rot = 0)
+dev.off()
+
+pdf(file = paste0(results_path,"/updated_figures/PDFs/de_markers_heatmap.pdf"),width = 20, height = 12)
+Heatmap(as.matrix(batches_log_de_markers_pdf), 
+        col = color_scale_de, 
+        row_split = de_markers[rownames(batches_log_de_markers_pdf),c("cluster")],
+        column_split = project.metadata.pdf[colnames(batches_log_de_markers_pdf),c("Batch")],
+        show_row_names = FALSE, 
+        row_title_rot = 0)
+dev.off()
+```
+
+
+```{r}
+# Manually remove cells that don't have strong CHI markers and cluster separately in marker heatmaps generated above
+# Based on curated marker patterns and DE marker patterns, exclude
+# CHI069, CHI117, CHI163, CHI164, CHI167, CHI168, CHI169, CHI171, CHI175, CHI178
+project.metadata.final <- subset(project.metadata.ep.filter.chi,
+                                 SAMPLE_ID %in% c("CHI069", "CHI117",
+                                                  "CHI163", "CHI164", "CHI167", "CHI168", "CHI169",
+                                                  "CHI171", "CHI175", "CHI178") == FALSE)
+```
+
+
+```{r}
+# Get counts "matrices" for starting point for DE analysis
+# For this start with raw, collapsed counts 
+
+# Remove ERCC genes for DE as well
+# Subset to cells which are in the final filtered project metadata 
+counts_mtx_for_de <- batches_merged_collapsed[grep(pattern = "ERCC", rownames(batches_merged_collapsed), invert = TRUE), rownames(project.metadata.final)]
+
+# Round counts for DESeq2
+counts_mtx_rounded <- round(counts_mtx_for_de)
+
+# Make into an actual matrix
+counts_mtx_rounded <- as.matrix(counts_mtx_rounded)
+```
+
+
+```{r}
+# Working off this documentation fro differential expression analysis:
+# https://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+# Pre filter genes first
+# Looking at 62 Het and 53 WT
+# Want to keep genes detected in ~25% of cells, so 25 cells
+# Use a minimum count per gene per cell of 100
+smallestGroupSizeToKeep <- 25
+keep <- rowSums(counts_mtx_rounded >= 100) >= smallestGroupSizeToKeep
+
+# This will keep 12,250 genes
+counts_mtx_rounded_filtered <- counts_mtx_rounded[keep,]
+
+# Take electrophysiologist into account in the model
+# Create factors for geneotype, electrophysiologist, and activity
+project.metadata.final$EP_factor <- as.factor(project.metadata.final$Electrophysiologist)
+project.metadata.final$GT_factor <- factor(project.metadata.final$Genotype, levels = c("WT","Het"))
+project.metadata.final$Activity <- "Unknown"
+project.metadata.final$Activity <- ifelse(project.metadata.final$tonic_firing == "TRUE", "Active", project.metadata.final$Activity)
+project.metadata.final$Activity <- ifelse(project.metadata.final$tonic_firing == "FALSE", "Silent", project.metadata.final$Activity)
+project.metadata.final$Activity <- ifelse(is.na(project.metadata.final$tonic_firing) == TRUE, "Unknown", project.metadata.final$Activity)
+project.metadata.final$Activity <- as.factor(project.metadata.final$Activity)
+
+# If needecd, replace % symbol in project metadata with "Percent" to avoid any issues with reading symbols
+colnames(project.metadata.final) <- str_replace(colnames(project.metadata.final)," \\(%\\)", "_Percent")
+
+# Make columns for metrics into numerical data for DE model(s)
+# Columns 28 through 42
+for(i in c(28:42))
+{
+  project.metadata.final[,c(i)] <- as.numeric(project.metadata.final[,c(i)])
+}
+```
+
+
+```{r}
+# Recevied this warning message when running the model with duplication % and intronic % values:
+#   the design formula contains one or more numeric variables that have mean or
+#   standard deviation larger than 5 (an arbitrary threshold to trigger this message).
+#   Including numeric variables with large mean can induce collinearity with the intercept.
+#   Users should center and scale numeric variables in the design to improve GLM convergence.
+# So will use scaled and centered values for these metrics in the DE model
+
+####################################################################################################################################
+# DUPLICATION and INTRONIC model #
+# Using intronic percent as a stand-in for nucleus+ status
+# See here: https://elifesciences.org/articles/65482
+dds_by_GT_with_duplication_intronic <- DESeqDataSetFromMatrix(countData = counts_mtx_rounded_filtered, colData = project.metadata.final, 
+                                                  design = ~ duplication_scaled + intronic_scaled + Activity + EP_factor + GT_factor)
+dds_by_GT_with_duplication_intronic <- DESeq(dds_by_GT_with_duplication_intronic, fitType = "local")
+
+resultsNames(dds_by_GT_with_duplication_intronic)
+
+# get DE results
+Genotype_Het_vs_WT_with_duplication_intronic <- results(dds_by_GT_with_duplication_intronic, contrast = c("GT_factor","Het","WT"))
+Genotype_Het_vs_WT_with_duplication_intronic_DF <- data.frame(Genotype_Het_vs_WT_with_duplication_intronic)
+Genotype_Het_vs_WT_with_duplication_intronic_DF$Gene <- rownames(Genotype_Het_vs_WT_with_duplication_intronic_DF)
+Genotype_Het_vs_WT_with_duplication_intronic_DF <- Genotype_Het_vs_WT_with_duplication_intronic_DF[,c(7,1:6)]
+
+# Look at Cook's distances to see if there are any clear samples that are driving 500 hundred outlier genes
+# Cook’s distance is a measure of how much a single sample is influencing the fitted coefficients for a gene, and a large value of Cook’s distance is intended to indicate an outlier count
+# Evaluation of this figure did not indicate any clear significant outliers
+png(filename = paste0(results_path, "/duplication_intronic_rate/Cooks_Distance_for_Outliers_with_duplication_intronic.png"), units = "in", res = 300, width = 8, height = 6)
+boxplot(log10(assays(dds_by_GT_with_duplication_intronic)[["cooks"]]), range=0, las=2)
+dev.off()
+
+# Order by p-value
+Genotype_Het_vs_WT_with_duplication_intronic_DF <- Genotype_Het_vs_WT_with_duplication_intronic_DF[order(Genotype_Het_vs_WT_with_duplication_intronic_DF$pvalue, decreasing = FALSE),]
+
+# Write out results files
+write.table(Genotype_Het_vs_WT_with_duplication_intronic_DF, file = paste0(results_path,"/duplication_intronic_rate/DESeq_Genotype_Het_vs_WT_with_duplication_intronic.tsv"), sep = "\t",
+            quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+# Save DESeq object
+saveRDS(dds_by_GT_with_duplication_intronic, file = paste0(results_path,"/duplication_intronic_rate/DESeq_Object_Genotype_Het_vs_WT_with_duplication_intronic.rds"))
+####################################################################################################################################
+```
